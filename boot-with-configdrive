@@ -1,0 +1,189 @@
+#!/bin/sh
+
+# This will generate a openstack-style config drive image suitable for
+# use with cloud-init.  You may optionally pass in an ssh public key
+# (using the -k/--ssh-key option) and a user-data blob (using the
+# -u/--user-data option).
+
+usage () {
+	echo "usage: ${0##*/}: \n[--ssh-key <pubkey>] \n[--vendor-data <file>] \n[--user-data <file>] \n[--iso <config_drive iso>] \n[--ip <ip_address>] \n[--netmask <netmask>] \n[--gateway <gateway>] \n[--memory <memory>] \n[--disk <disk size>] \n[--vcpu <vcpus>] \n[--password <password for default user>]  <hostname>"
+}
+
+ARGS=$(getopt \
+	-o k:u:v:o:i:n:g:m:c:d:p: \
+	--long help,iso:,ssh-key:,user-data:,vendor-data:,ip:,netmask:,gateway:,memory:,vcpu:,disk:,password: -n ${0##*/} \
+	-- "$@")
+
+if [ $? -ne 0 ]; then
+	usage >&2
+	exit 2
+fi
+
+eval set -- "$ARGS"
+
+
+
+while :; do
+	case "$1" in
+		--help)
+			usage
+			exit 0
+			;;
+		-k|--ssh-key)
+			ssh_key="$2"
+			shift 2
+			;;
+		-u|--user-data)
+			user_data="$2"
+			shift 2
+			;;
+		-v|--vendor-data)
+			vendor_data="$2"
+			shift 2
+			;;
+		-o|--iso)
+			config_image="$2"
+			shift 2
+			;;
+		-i|--ip)
+		  ip="$2"
+			shift 2
+			;;
+		-g|--gateway)
+		  gateway="$2"
+			shift 2
+		  ;;
+		-n|--netmask)
+		  netmask="$2"
+			shift 2
+			;;
+		-m|--memory)
+		  memory="$2"
+			shift 2
+			;;
+		-c|--vcpu)
+		  vcpu="$2"
+			shift 2
+			;;
+		-d|--disk)
+		  disk="$2"
+			shift 2
+			;;
+		-p|--password)
+		  password="$2"
+			shift 2
+			;;
+		--)	shift
+			break
+			;;
+	esac
+done
+
+hostname=$1
+shift
+
+# Some basic Settings and defaults=
+baseimage="/var/lib/libvirt/images/ubuntu-18.04-server-cloudimg-amd64.img"
+
+if ! [ "$config_image" ]; then
+	config_image="/var/lib/libvirt/images/${hostname}-config.iso"
+fi
+
+if ! [ "$vcpu" ]; then
+	vcpu="2"
+fi
+
+if ! [ "$memory" ]; then
+	memory="4096"
+fi
+
+if ! [ "$disk" ]; then
+	disk="100"
+fi
+
+
+
+if [ "$ssh_key" ] && [ -f "$ssh_key" ]; then
+	echo "adding pubkey from $ssh_key"
+	ssh_key_data=$(cat "$ssh_key")
+fi
+
+uuid=$(uuidgen)
+if ! [ "$hostname" ]; then
+	hostname="$uuid"
+fi
+
+trap 'rm -rf $config_dir' EXIT
+config_dir=$(mktemp -t -d configXXXXXX)
+
+echo "Generating user-data"
+if [ "$user_data" ] && [ -f "$user_data" ]; then
+	echo "adding user data from $user_data"
+	cp $user_data $config_dir/user-data
+else
+	touch $config_dir/user-data
+fi
+
+if [ "$vendor_data" ] && [ -f "$vendor_data" ]; then
+	echo "adding vendor data from $vendor_data"
+	cp $vendor_data $config_dir/vendor-data
+fi
+
+echo "Generating meta-data"
+cat > $config_dir/meta-data <<-EOF
+instance-id: $uuid
+hostname: $hostname
+local-hostname: $hostname
+EOF
+
+if [ "$ip" ]; then
+	echo "Adding network information"
+	cat >> $config_dir/meta-data <<-EOF
+	network-interfaces: |
+	  iface ens2 inet static
+	  address $ip
+	  netmask $netmask
+	  gateway $gateway
+	EOF
+fi
+
+if [ "$ssh_key_data" ]; then
+	echo "Adding ssh key to meta-data"
+	cat >> $config_dir/meta-data <<-EOF
+	public-keys:
+	  - |
+	    $ssh_key_data
+	EOF
+fi
+
+echo "Setting password $password for default user"
+if [ "$password" ]; then
+  if [ ! $(grep "#cloud-config" $config_dir/user-data)]; then
+		echo "#cloud-config" >> $config_dir/user-data
+	fi
+  echo "password: $password" >> $config_dir/user-data
+fi
+#PS1="debug> " bash --norc
+
+echo "generating configuration image at $config_image"
+if ! mkisofs -o $config_image -V cidata -r -J --quiet $config_dir; then
+	echo "ERROR: failed to create $config_image" >&2
+	exit 1
+fi
+chmod a+r $config_image
+
+
+# Copy the base image
+targetdisk="/var/lib/libvirt/images/${hostname}.qcow2"
+
+echo "Creating target disk"
+# TODO: detect if qcow2 or need to be converted
+cp ${baseimage} ${targetdisk}
+
+
+echo "Booting ${hostname}"
+virt-install --import --name ${hostname} --memory ${memory} --vcpus ${vcpu} \
+   --disk path=${targetdisk},size=${disk},bus=virtio,format=qcow2 \
+	 --disk path=${config_image},device=cdrom \
+	 --os-type=Generic --os-variant=Generic --network bridge=br0,model=virtio \
+	 --graphics none --console pty,target_type=serial
