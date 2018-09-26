@@ -6,12 +6,12 @@
 # -u/--user-data option).
 
 usage () {
-	echo "usage: ${0##*/}: \n[--ssh-key <pubkey>] \n[--vendor-data <file>] \n[--user-data <file>] \n[--iso <config_drive iso>] [--netplan <network-config file>] \n[--memory <memory>] \n[--disk <disk size>] \n[--vcpu <vcpus>] \n[--password <password for default user>]  <hostname>"
+	echo "usage: ${0##*/}: \n[--ssh-key <pubkey>] \n[--vendor-data <file>] \n[--user-data <file>] \n[--iso <config_drive iso>] [--netplan <network-config file>] \n[--memory <memory>] \n[--disk <disk size>] \n[--vcpu <vcpus>] \n[--password <password for default user>] \n [--domain <domain for fqdn / hostname>] <hostname>"
 }
 
 ARGS=$(getopt \
-	-o k:u:v:o:n:m:c:d:p: \
-	--long help,iso:,ssh-key:,user-data:,vendor-data:,netplan:,memory:,vcpu:,disk:,password: -n ${0##*/} \
+	-o k:u:v:o:n:m:c:d:p:f: \
+	--long help,iso:,ssh-key:,user-data:,vendor-data:,netplan:,memory:,vcpu:,disk:,password:domain: -n ${0##*/} \
 	-- "$@")
 
 if [ $? -ne 0 ]; then
@@ -61,6 +61,10 @@ while :; do
 		  disk="$2"
 			shift 2
 			;;
+		-f|--domain)
+			domain="$2"
+			shift 2
+			;;
 		-p|--password)
 		  password="$2"
 			shift 2
@@ -70,6 +74,8 @@ while :; do
 			;;
 	esac
 done
+
+## TODO: Fix no hostname given
 
 hostname=$1
 shift
@@ -128,8 +134,12 @@ hostname: $hostname
 local-hostname: $hostname
 EOF
 
-if [ "$netplan" ]; then
- 	cp $netplan $config_dir/network-config
+if [ "$domain" ]; then
+	echo "fqdn: ${hostname}.${domain}" >> $config_dir/meta-data
+fi
+
+if [ "$netplanfile" ]; then
+ 	cp $netplanfile $config_dir/network-config
 fi
 
 if [ "$ssh_key_data" ]; then
