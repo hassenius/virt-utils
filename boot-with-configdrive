@@ -6,12 +6,12 @@
 # -u/--user-data option).
 
 usage () {
-	echo "usage: ${0##*/}: \n[--ssh-key <pubkey>] \n[--vendor-data <file>] \n[--user-data <file>] \n[--iso <config_drive iso>] \n[--ip <ip_address>] \n[--netmask <netmask>] \n[--gateway <gateway>] \n[--memory <memory>] \n[--disk <disk size>] \n[--vcpu <vcpus>] \n[--password <password for default user>]  <hostname>"
+	echo "usage: ${0##*/}: \n[--ssh-key <pubkey>] \n[--vendor-data <file>] \n[--user-data <file>] \n[--iso <config_drive iso>] [--netplan <network-config file>] \n[--memory <memory>] \n[--disk <disk size>] \n[--vcpu <vcpus>] \n[--password <password for default user>]  <hostname>"
 }
 
 ARGS=$(getopt \
-	-o k:u:v:o:i:n:g:m:c:d:p: \
-	--long help,iso:,ssh-key:,user-data:,vendor-data:,ip:,netmask:,gateway:,memory:,vcpu:,disk:,password: -n ${0##*/} \
+	-o k:u:v:o:n:m:c:d:p: \
+	--long help,iso:,ssh-key:,user-data:,vendor-data:,netplan:,memory:,vcpu:,disk:,password: -n ${0##*/} \
 	-- "$@")
 
 if [ $? -ne 0 ]; then
@@ -45,16 +45,8 @@ while :; do
 			config_image="$2"
 			shift 2
 			;;
-		-i|--ip)
-		  ip="$2"
-			shift 2
-			;;
-		-g|--gateway)
-		  gateway="$2"
-			shift 2
-		  ;;
-		-n|--netmask)
-		  netmask="$2"
+		-n|--netplan)
+		  netplanfile="$2"
 			shift 2
 			;;
 		-m|--memory)
@@ -136,15 +128,8 @@ hostname: $hostname
 local-hostname: $hostname
 EOF
 
-if [ "$ip" ]; then
-	echo "Adding network information"
-	cat >> $config_dir/meta-data <<-EOF
-	network-interfaces: |
-	  iface ens2 inet static
-	  address $ip
-	  netmask $netmask
-	  gateway $gateway
-	EOF
+if [ "$netplan" ]; then
+ 	cp $netplan $config_dir/network-config
 fi
 
 if [ "$ssh_key_data" ]; then
@@ -180,10 +165,14 @@ echo "Creating target disk"
 # TODO: detect if qcow2 or need to be converted
 cp ${baseimage} ${targetdisk}
 
+# Resize disk
+qemu-img resize ${targetdisk} ${disk}G
 
 echo "Booting ${hostname}"
 virt-install --import --name ${hostname} --memory ${memory} --vcpus ${vcpu} \
    --disk path=${targetdisk},size=${disk},bus=virtio,format=qcow2 \
 	 --disk path=${config_image},device=cdrom \
-	 --os-type=Generic --os-variant=Generic --network bridge=br0,model=virtio \
+	 --os-type=Generic --os-variant=Generic \
+	 --network bridge=br0,model=virtio --network bridge=br0,model=virtio \
+	 --network bridge=br0,model=virtio --network bridge=br0,model=virtio \
 	 --graphics none --console pty,target_type=serial
