@@ -75,7 +75,12 @@ while :; do
 	esac
 done
 
-## TODO: Fix no hostname given
+##
+if [ $# -ne 1 ]; then
+	usage >&2
+	echo "please supply hostname"
+	exit 1
+fi
 
 hostname=$1
 shift
